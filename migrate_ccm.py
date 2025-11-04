@@ -1,5 +1,6 @@
 import os
 import json
+import csv
 
 # Path settings
 input_folder = 'Old CEIs'     # folder with original JSON files
@@ -10,6 +11,9 @@ os.makedirs(output_folder, exist_ok=True)
 
 # Set to collect all distinct framework keys
 detected_frameworks = set()
+
+# List to collect titles for CSV export
+titles_list = []
 
 # Fields to remove entirely
 remove_fields = {
@@ -74,7 +78,16 @@ def transform_json(data):
     transformed["finding_config"] = finding_config
 
     transformed["exposure_category"] = data.get("exposure_category", "")
-    transformed["control_mapping"] = data.get("framework_mapping", {})
+    
+    # Transform control_mapping and uppercase all values
+    framework_mapping = data.get("framework_mapping", {})
+    control_mapping = {}
+    for framework, values in framework_mapping.items():
+        if isinstance(values, list):
+            control_mapping[framework] = [v.upper() if isinstance(v, str) else v for v in values]
+        else:
+            control_mapping[framework] = values
+    transformed["control_mapping"] = control_mapping
 
     return transformed
 
@@ -92,6 +105,12 @@ for filename in os.listdir(input_folder):
 
                 # Transform structure (before removing ui_config, as it's needed for finding_config)
                 transformed_data = transform_json(original_data)
+
+                # Collect title for CSV export
+                titles_list.append({
+                    "id": transformed_data.get("id", ""),
+                    "title": transformed_data.get("title", "")
+                })
 
                 # Remove unwanted fields from original_data (not needed anymore, but keeping for consistency)
                 for field in remove_fields:
@@ -118,4 +137,17 @@ if detected_frameworks:
     print(f"\nDetected {len(detected_frameworks)} distinct framework(s). Saved to '{frameworks_file}'")
 else:
     print("\nNo frameworks detected in any CEI files.")
+
+# Save titles to CSV file
+if titles_list:
+    csv_file = "cei_titles.csv"
+    with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=["id", "title"])
+        writer.writeheader()
+        # Sort by ID for consistent output
+        sorted_titles = sorted(titles_list, key=lambda x: x["id"])
+        writer.writerows(sorted_titles)
+    print(f"\nSaved {len(titles_list)} title(s) to '{csv_file}'")
+else:
+    print("\nNo titles collected to save.")
  
