@@ -2,11 +2,14 @@ import os
 import json
 
 # Path settings
-input_folder = 'input_folder'     # folder with original JSON files
-output_folder = 'output_folder'
+input_folder = 'Old CEIs'     # folder with original JSON files
+output_folder = 'New CEIs'
 
 # Ensure output directory exists
 os.makedirs(output_folder, exist_ok=True)
+
+# Set to collect all distinct framework keys
+detected_frameworks = set()
 
 # Fields to remove entirely
 remove_fields = {
@@ -25,24 +28,50 @@ def transform_json(data):
     # Field mappings
     transformed["id"] = data.get("cei_code", "")
     transformed["title"] = data.get("cei_title", "")
-    transformed["contributing_module"] = data.get("contributing_module", [])
+    transformed["contributing_module"] = ["Reporting"]
     transformed["is_active"] = data.get("is_active", True)
     transformed["description"] = data.get("description", data.get("cei_description", ""))
     transformed["scope_entity"] = data.get("entity", [])
     transformed["scope_validation_steps"] = data.get("cei_description", [])
     transformed["scope_query"] = data.get("sql_query", "")
     transformed["success_condition"] = data.get("cei_condition", "")
-    transformed["finding_primary_key"] = data.get("finding_primary_key", "")
+    
+    # Set finding_primary_key based on scope_entity count
+    scope_entity = transformed["scope_entity"]
+    if len(scope_entity) > 1:
+        transformed["finding_primary_key"] = "relationship_id"
+    else:
+        transformed["finding_primary_key"] = "p_id"
+    
     transformed["finding_title"] = data.get("finding_title", "")
 
-    # Add a default finding_config template if not present
-    transformed["finding_config"] = [
-        {
-            "title": "",
-            "expression": "",
-            "finding_evidence": True
-        }
-    ]
+    # Transform ui_config.mapping into finding_config
+    finding_config = []
+    ui_config = data.get("ui_config", {})
+    mappings = ui_config.get("mapping", []) or ui_config.get("mappings", [])
+    
+    if mappings:
+        for mapping_item in mappings:
+            # Skip cei_status field
+            data_field = mapping_item.get("data_field", "")
+            if data_field == "cei_status":
+                continue
+            finding_config.append({
+                "title": mapping_item.get("data_label", ""),
+                "expression": data_field,
+                "finding_evidence": True
+            })
+    else:
+        # Add a default finding_config template if no mappings present
+        finding_config = [
+            {
+                "title": "",
+                "expression": "",
+                "finding_evidence": True
+            }
+        ]
+    
+    transformed["finding_config"] = finding_config
 
     transformed["exposure_category"] = data.get("exposure_category", "")
     transformed["control_mapping"] = data.get("framework_mapping", {})
@@ -56,12 +85,17 @@ for filename in os.listdir(input_folder):
             try:
                 original_data = json.load(f)
 
-                # Remove unwanted fields
+                # Collect framework keys from framework_mapping
+                framework_mapping = original_data.get("framework_mapping", {})
+                if isinstance(framework_mapping, dict):
+                    detected_frameworks.update(framework_mapping.keys())
+
+                # Transform structure (before removing ui_config, as it's needed for finding_config)
+                transformed_data = transform_json(original_data)
+
+                # Remove unwanted fields from original_data (not needed anymore, but keeping for consistency)
                 for field in remove_fields:
                     original_data.pop(field, None)
-
-                # Transform structure
-                transformed_data = transform_json(original_data)
 
                 # Save transformed JSON
                 output_path = os.path.join(output_folder, filename)
@@ -72,4 +106,16 @@ for filename in os.listdir(input_folder):
 
             except json.JSONDecodeError:
                 print(f"Skipping invalid JSON: {filename}")
+
+# Save detected frameworks to text file
+if detected_frameworks:
+    frameworks_file = "detected frameworks.txt"
+    with open(frameworks_file, 'w', encoding='utf-8') as f:
+        # Sort frameworks for consistent output
+        sorted_frameworks = sorted(detected_frameworks)
+        for framework in sorted_frameworks:
+            f.write(f"{framework}\n")
+    print(f"\nDetected {len(detected_frameworks)} distinct framework(s). Saved to '{frameworks_file}'")
+else:
+    print("\nNo frameworks detected in any CEI files.")
  
