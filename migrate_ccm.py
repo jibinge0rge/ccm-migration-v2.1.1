@@ -19,6 +19,29 @@ remove_fields = {
     "ui_config"
 }
 
+def extract_condition_from_case(cei_condition):
+    """Extract the condition part from CASE WHEN statement.
+    
+    Converts "CASE WHEN <condition> THEN true ELSE false END" to "<condition>"
+    """
+    if not cei_condition:
+        return ""
+    
+    cei_condition = cei_condition.strip()
+    
+    # Check if it's a CASE WHEN statement
+    if cei_condition.upper().startswith("CASE WHEN"):
+        # Find "THEN true" or "THEN TRUE" to extract the condition
+        # Handle both "THEN true" and "THEN TRUE"
+        then_index = cei_condition.upper().find(" THEN ")
+        if then_index > 0:
+            # Extract the part after "CASE WHEN" and before "THEN"
+            condition = cei_condition[9:then_index].strip()  # 9 is length of "CASE WHEN"
+            return condition
+    
+    # If it doesn't match the pattern, return as is
+    return cei_condition
+
 # Main transformation logic
 def transform_json(data, finding_title_map=None, framework_normalization_map=None, assessment_id_map=None):
     transformed = {}
@@ -38,7 +61,10 @@ def transform_json(data, finding_title_map=None, framework_normalization_map=Non
     transformed["scope_entity"] = data.get("entity", [])
     transformed["scope_validation_steps"] = data.get("cei_description", [])
     transformed["scope_query"] = data.get("sql_query", "")
-    transformed["success_condition"] = data.get("cei_condition", "")
+    
+    # Extract condition from CASE WHEN statement
+    cei_condition = data.get("cei_condition", "")
+    transformed["success_condition"] = extract_condition_from_case(cei_condition)
     
     # Set finding_primary_key based on scope_entity count
     scope_entity = transformed["scope_entity"]
