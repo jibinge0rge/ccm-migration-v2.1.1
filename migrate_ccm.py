@@ -20,11 +20,17 @@ remove_fields = {
 }
 
 # Main transformation logic
-def transform_json(data, finding_title_map=None, framework_normalization_map=None):
+def transform_json(data, finding_title_map=None, framework_normalization_map=None, assessment_id_map=None):
     transformed = {}
 
-    # Field mappings
-    transformed["id"] = data.get("cei_code", "")
+    # Get cei_code from old CEI
+    cei_code = data.get("cei_code", "")
+    
+    # Use assessment_id from CSV as the new id, fallback to cei_code if not found
+    if assessment_id_map and cei_code in assessment_id_map:
+        transformed["id"] = assessment_id_map[cei_code]
+    else:
+        transformed["id"] = cei_code
     transformed["title"] = data.get("cei_title", "")
     transformed["contributing_module"] = ["Reporting"]
     transformed["is_active"] = data.get("is_active", True)
@@ -42,9 +48,9 @@ def transform_json(data, finding_title_map=None, framework_normalization_map=Non
         transformed["finding_primary_key"] = "p_id"
     
     # Map finding_title from CSV if available, otherwise use original or empty string
-    cei_id = transformed["id"]
-    if finding_title_map and cei_id in finding_title_map:
-        transformed["finding_title"] = finding_title_map[cei_id] if finding_title_map[cei_id] else ""
+    # Use cei_code (not the new id) to look up finding_title since the map uses cei_code as key
+    if finding_title_map and cei_code in finding_title_map:
+        transformed["finding_title"] = finding_title_map[cei_code] if finding_title_map[cei_code] else ""
     else:
         transformed["finding_title"] = data.get("finding_title", "")
 
@@ -76,13 +82,23 @@ def transform_json(data, finding_title_map=None, framework_normalization_map=Non
     
     transformed["finding_config"] = finding_config
 
-    transformed["exposure_category"] = data.get("exposure_category", "")
+    transformed["exposure_category"] = "Control Gap"
     
     # Transform control_mapping and uppercase all values
     # Use normalized framework names if available
+    # Exclude nist_csf_v1 and scf_2023_2 from old CEIs
+    # Keep only scf_2023_4 from old CEIs
     framework_mapping = data.get("framework_mapping", {})
     control_mapping = {}
     for framework, values in framework_mapping.items():
+        # Skip nist_csf_v1 from old CEIs
+        if framework == "nist_csf_v1":
+            continue
+        
+        # Skip scf_2023_2 from old CEIs, but keep scf_2023_4
+        if framework == "scf_2023_2":
+            continue
+        
         # Use normalized framework name if available, otherwise use original
         normalized_framework = framework
         if framework_normalization_map and framework in framework_normalization_map:
@@ -96,106 +112,140 @@ def transform_json(data, finding_title_map=None, framework_normalization_map=Non
 
     return transformed
 
-def detect_frameworks():
-    """Detect all distinct frameworks from Old CEIs and save to CSV"""
-    detected_frameworks = set()
-    
-    print("\nDetecting frameworks from Old CEIs...")
-    for filename in os.listdir(input_folder):
-        if filename.endswith(".json"):
-            with open(os.path.join(input_folder, filename), 'r', encoding='utf-8') as f:
-                try:
-                    original_data = json.load(f)
-                    framework_mapping = original_data.get("framework_mapping", {})
-                    if isinstance(framework_mapping, dict):
-                        detected_frameworks.update(framework_mapping.keys())
-                except json.JSONDecodeError:
-                    print(f"Skipping invalid JSON: {filename}")
-    
-    # Save detected frameworks to CSV file
-    if detected_frameworks:
-        frameworks_file = "detected_frameworks.csv"
-        # Check if file exists and read existing data
-        existing_data = {}
-        if os.path.exists(frameworks_file):
-            with open(frameworks_file, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    existing_data[row["framework"]] = row.get("normalized_framework", "")
-        
-        with open(frameworks_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=["framework", "normalized_framework"])
-            writer.writeheader()
-            # Sort frameworks for consistent output
-            sorted_frameworks = sorted(detected_frameworks)
-            for framework in sorted_frameworks:
-                # Preserve existing normalized_framework if it exists
-                normalized = existing_data.get(framework, "")
-                writer.writerow({"framework": framework, "normalized_framework": normalized})
-        print(f"\nDetected {len(detected_frameworks)} distinct framework(s). Saved to '{frameworks_file}'")
-    else:
-        print("\nNo frameworks detected in any CEI files.")
-
-def extract_titles():
-    """Extract all titles from Old CEIs and save to CSV"""
-    titles_list = []
-    
-    print("\nExtracting titles from Old CEIs...")
-    for filename in os.listdir(input_folder):
-        if filename.endswith(".json"):
-            with open(os.path.join(input_folder, filename), 'r', encoding='utf-8') as f:
-                try:
-                    original_data = json.load(f)
-                    transformed_data = transform_json(original_data)
-                    
-                    # Collect title for CSV export
-                    titles_list.append({
-                        "id": transformed_data.get("id", ""),
-                        "title": transformed_data.get("title", ""),
-                        "finding_title": ""
-                    })
-                except json.JSONDecodeError:
-                    print(f"Skipping invalid JSON: {filename}")
-    
-    # Save titles to CSV file
-    if titles_list:
-        csv_file = "cei_titles.csv"
-        # Check if file exists and read existing finding_title data
-        existing_data = {}
-        if os.path.exists(csv_file):
-            with open(csv_file, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    existing_data[row["id"]] = row.get("finding_title", "")
-        
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=["id", "title", "finding_title"])
-            writer.writeheader()
-            # Sort by ID for consistent output
-            sorted_titles = sorted(titles_list, key=lambda x: x["id"])
-            for title_row in sorted_titles:
-                # Preserve existing finding_title if it exists
-                cei_id = title_row["id"]
-                if cei_id in existing_data:
-                    title_row["finding_title"] = existing_data[cei_id]
-                writer.writerow(title_row)
-        print(f"\nSaved {len(titles_list)} title(s) to '{csv_file}'")
-    else:
-        print("\nNo titles collected to save.")
-
-def load_finding_title_map():
-    """Load finding_title mappings from cei_titles.csv"""
-    finding_title_map = {}
+def load_cei_titles_data():
+    """Load all CEI titles data from cei_titles.csv"""
+    cei_data = {}
     csv_file = "cei_titles.csv"
     if os.path.exists(csv_file):
         with open(csv_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                cei_id = row.get("id", "")
-                finding_title = row.get("finding_title", "")
+                # Support both old "id" and new "cei_id" column names for backward compatibility
+                cei_id = row.get("cei_id", row.get("id", ""))
                 if cei_id:
-                    finding_title_map[cei_id] = finding_title
+                    cei_data[cei_id] = {
+                        "finding_title": row.get("finding_title", "").strip(),
+                        "assessment_id": row.get("assessment_id", "").strip(),
+                        "title": row.get("title", "").strip()
+                    }
+    return cei_data
+
+def load_finding_title_map():
+    """Load finding_title mappings from cei_titles.csv"""
+    finding_title_map = {}
+    cei_data = load_cei_titles_data()
+    for cei_id, data in cei_data.items():
+        finding_title_map[cei_id] = data["finding_title"]
     return finding_title_map
+
+def load_assessment_id_map():
+    """Load assessment_id mappings from cei_titles.csv"""
+    assessment_id_map = {}
+    cei_data = load_cei_titles_data()
+    for cei_id, data in cei_data.items():
+        assessment_id_map[cei_id] = data["assessment_id"]
+    return assessment_id_map
+
+def validate_cei_titles(specific_cei_ids=None):
+    """Validate that all CEIs being migrated have finding_title and assessment_id values"""
+    csv_file = "cei_titles.csv"
+    
+    if not os.path.exists(csv_file):
+        print(f"\nError: '{csv_file}' not found. Please run generate_csvs.py first to create it.")
+        return False
+    
+    # Load all CEI data
+    cei_data = load_cei_titles_data()
+    
+    # Determine which CEIs need to be validated
+    if specific_cei_ids:
+        # Normalize specific CEI IDs for matching
+        ceis_to_check = set()
+        for cei_id in specific_cei_ids:
+            cei_id = cei_id.strip()
+            # Remove .json if present
+            if cei_id.endswith('.json'):
+                cei_id = cei_id[:-5]
+            # Ensure CEI- prefix
+            if not cei_id.startswith('CEI-'):
+                cei_id = f"CEI-{cei_id}"
+            ceis_to_check.add(cei_id)
+    else:
+        # Check all CEIs in the CSV
+        ceis_to_check = set(cei_data.keys())
+    
+    missing_finding_titles = []
+    missing_assessment_ids = []
+    
+    for cei_id in ceis_to_check:
+        if cei_id not in cei_data:
+            print(f"\nError: CEI '{cei_id}' not found in '{csv_file}'. Please add it first.")
+            return False
+        
+        data = cei_data[cei_id]
+        
+        # Check if finding_title is missing
+        if not data["finding_title"]:
+            missing_finding_titles.append(cei_id)
+        
+        # Check if assessment_id is missing
+        if not data["assessment_id"]:
+            missing_assessment_ids.append(cei_id)
+    
+    # Report errors
+    errors = []
+    if missing_finding_titles:
+        errors.append(f"  Missing finding_title for: {', '.join(missing_finding_titles)}")
+    if missing_assessment_ids:
+        errors.append(f"  Missing assessment_id for: {', '.join(missing_assessment_ids)}")
+    
+    if errors:
+        print(f"\nError: The following CEIs in '{csv_file}' are missing required values:")
+        for error in errors:
+            print(error)
+        print(f"\nPlease update '{csv_file}' with finding_title and assessment_id values for all CEIs before running the migration.")
+        return False
+    
+    return True
+
+def validate_framework_normalization():
+    """Validate that all frameworks in detected_frameworks.csv have normalized_framework values"""
+    frameworks_file = "detected_frameworks.csv"
+    missing_normalizations = []
+    
+    # Frameworks that are excluded from migration and don't need normalized_framework values
+    excluded_frameworks = {"nist_csf_v1", "scf_2023_2"}
+    
+    if not os.path.exists(frameworks_file):
+        print(f"\nError: '{frameworks_file}' not found. Please run generate_csvs.py first to create it.")
+        return False
+    
+    with open(frameworks_file, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            framework = row.get("framework", "").strip()
+            normalized_framework = row.get("normalized_framework", "").strip()
+            
+            # Skip empty rows
+            if not framework:
+                continue
+            
+            # Skip excluded frameworks that don't need normalized_framework values
+            if framework in excluded_frameworks:
+                continue
+            
+            # Check if normalized_framework is missing or empty
+            if not normalized_framework:
+                missing_normalizations.append(framework)
+    
+    if missing_normalizations:
+        print(f"\nError: The following frameworks in '{frameworks_file}' are missing normalized_framework values:")
+        for framework in missing_normalizations:
+            print(f"  - {framework}")
+        print(f"\nPlease update '{frameworks_file}' with normalized_framework values for all frameworks before running the migration.")
+        return False
+    
+    return True
 
 def load_framework_normalization_map():
     """Load framework normalization mappings from detected_frameworks.csv"""
@@ -222,14 +272,25 @@ def migrate_ceis(specific_cei_ids=None):
     else:
         print("\nMigrating all CEIs from Old CEIs to New CEIs...")
     
+    # Validate framework normalization before proceeding
+    if not validate_framework_normalization():
+        return
+    
+    # Validate CEI titles (finding_title and assessment_id) before proceeding
+    if not validate_cei_titles(specific_cei_ids):
+        return
+    
     # Load mappings from CSV files
     finding_title_map = load_finding_title_map()
     framework_normalization_map = load_framework_normalization_map()
+    assessment_id_map = load_assessment_id_map()
     
     if finding_title_map:
         print(f"Loaded {len(finding_title_map)} finding_title mappings from cei_titles.csv")
     if framework_normalization_map:
         print(f"Loaded {len(framework_normalization_map)} framework normalizations from detected_frameworks.csv")
+    if assessment_id_map:
+        print(f"Loaded {len(assessment_id_map)} assessment_id mappings from cei_titles.csv")
     
     # Normalize specific CEI IDs for matching (remove .json, ensure CEI- prefix)
     target_filenames = set()
@@ -257,14 +318,15 @@ def migrate_ceis(specific_cei_ids=None):
                     original_data = json.load(f)
 
                     # Transform structure with mappings
-                    transformed_data = transform_json(original_data, finding_title_map, framework_normalization_map)
+                    transformed_data = transform_json(original_data, finding_title_map, framework_normalization_map, assessment_id_map)
 
-                    # Save transformed JSON
-                    output_path = os.path.join(output_folder, filename)
+                    # Use the new id (assessment_id) as the filename instead of the original filename
+                    new_filename = f"{transformed_data.get('id', 'unknown')}.json"
+                    output_path = os.path.join(output_folder, new_filename)
                     with open(output_path, 'w', encoding='utf-8') as out_f:
                         json.dump(transformed_data, out_f, indent=2)
 
-                    print(f"Processed: {filename}")
+                    print(f"Processed: {filename} -> {new_filename}")
                     processed_count += 1
 
                 except json.JSONDecodeError:
@@ -285,33 +347,27 @@ def show_menu():
         print("\n" + "="*50)
         print("CEI Migration Tool")
         print("="*50)
-        print("1. Detect all frameworks")
-        print("2. Extract all titles")
-        print("3. Migrate all CEIs")
-        print("4. Migrate specific CEIs")
-        print("5. Exit")
+        print("1. Migrate all CEIs")
+        print("2. Migrate specific CEIs")
+        print("3. Exit")
         print("="*50)
         
-        choice = input("\nEnter your choice (1-5): ").strip()
+        choice = input("\nEnter your choice (1-3): ").strip()
         
         if choice == "1":
-            detect_frameworks()
-        elif choice == "2":
-            extract_titles()
-        elif choice == "3":
             migrate_ceis()
-        elif choice == "4":
+        elif choice == "2":
             cei_input = input("\nEnter CEI IDs (comma-separated, e.g., CEI-1424,CEI-1426 or 1424,1426): ").strip()
             if cei_input:
                 cei_ids = [cei.strip() for cei in cei_input.split(",")]
                 migrate_ceis(specific_cei_ids=cei_ids)
             else:
                 print("\nNo CEI IDs provided. Cancelling migration.")
-        elif choice == "5":
+        elif choice == "3":
             print("\nExiting...")
             break
         else:
-            print("\nInvalid choice. Please enter 1, 2, 3, 4, or 5.")
+            print("\nInvalid choice. Please enter 1, 2, or 3.")
 
 if __name__ == "__main__":
     show_menu()
