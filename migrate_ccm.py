@@ -354,8 +354,10 @@ def migrate_ceis(specific_cei_ids=None):
                     # Transform structure with mappings
                     transformed_data = transform_json(original_data, finding_title_map, framework_normalization_map, assessment_id_map)
 
-                    # Use the new id (assessment_id) as the filename instead of the original filename
-                    new_filename = f"{transformed_data.get('id', 'unknown')}.json"
+                    # Use the new id (assessment_id) as the filename, but replace hyphens with underscores for filename
+                    # The id field in JSON remains unchanged (e.g., TP-PR-01)
+                    cei_id = transformed_data.get('id', 'unknown')
+                    new_filename = f"{cei_id.replace('-', '_')}.json"
                     output_path = os.path.join(output_folder, new_filename)
                     with open(output_path, 'w', encoding='utf-8') as out_f:
                         json.dump(transformed_data, out_f, indent=2)
