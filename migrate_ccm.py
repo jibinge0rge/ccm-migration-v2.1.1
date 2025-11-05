@@ -62,6 +62,14 @@ def transform_json(data, finding_title_map=None, framework_normalization_map=Non
     transformed["scope_validation_steps"] = data.get("cei_description", [])
     transformed["scope_query"] = data.get("sql_query", "")
     
+    # Replace table name in scope_query if scope_entity has only single entry
+    scope_entity = transformed["scope_entity"]
+    if len(scope_entity) == 1 and transformed["scope_query"]:
+        entity_value = scope_entity[0].lower()
+        old_table = "<%EI_PUBLISH_SCHEMA_NAME%>.sds_ei__publish_transformer__entity_inventory"
+        new_table = f"<%EI_SCHEMA_NAME%>.sds_ei__{entity_value}__enrich"
+        transformed["scope_query"] = transformed["scope_query"].replace(old_table, new_table)
+    
     # Extract condition from CASE WHEN statement
     cei_condition = data.get("cei_condition", "")
     transformed["success_condition"] = extract_condition_from_case(cei_condition)
